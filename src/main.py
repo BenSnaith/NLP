@@ -146,7 +146,7 @@ def print_classification_metrics(y_true, y_pred, model_name):
 # MODELS
 # --------------------------------
 
-class BaselineModel:
+class TFIDFModel:
     def __init__(self, max_features=20000, ngram_range=(1, 2), min_df=2, max_iter=1000):
         self.vectorizer = TfidfVectorizer(
             max_features=max_features,
@@ -396,6 +396,33 @@ class BertModel:
         metrics = print_classification_metrics(y_test, y_pred, "BERT Model")
         return y_pred, metrics
 
+class EnsembleModel:
+    def __init__(self, tfidf_model, transformer_model,
+                 baseline_weight=0.3, transformer_weight=0.7):
+        self.tfidf = tfidf_model
+        self.transformer = transformer_model
+        self.baseline_weight = baseline_weight
+        self.transformer_weight = transformer_weight
+
+    def predict(self, X):
+        print("Making ensemble predictions")
+
+        tfidf_preds = self.tfidf.predict(X)
+        transformer_preds = self.transformer.predict(X)
+
+        ensemble_preds = []
+        for tf_pred, tr_pred in zip(tfidf_preds, transformer_preds):
+            if tf_pred == tr_pred:
+                ensemble_preds.append(tf_pred)
+            else:
+                ensemble_preds.append(tr_pred)
+
+        return np.array(ensemble_preds)
+
+    def evaluate(self, X_test, y_test):
+        y_pred = self.predict(X_test)
+        metrics = print_classification_metrics(y_test, y_pred, "Ensemble Model (TF-IDF + BERT)")
+        return y_pred, metrics
 
 def main():
     print(f"{'-' * 60}")
@@ -427,7 +454,7 @@ def main():
     print(f"Training TF-IDF...")
     print(f"{'-' * 60}")
 
-    baseline = BaselineModel(max_features=20000, ngram_range=(1, 2), max_iter=1000)
+    baseline = TFIDFModel(max_features=20000, ngram_range=(1, 2), max_iter=1000)
     baseline.train(X_train, y_train)
 
     y_test_pred_baseline, test_metrics = baseline.evaluate(X_test, y_test)
@@ -465,6 +492,20 @@ def main():
         y_test, y_test_pred_bert,
         "BERT Model - Confusion Matrix",
         "../results/confusion-matrices/bert_confusion_matrix.png"
+    )
+
+    # ---------------------------------------
+    # ENSEMBLE
+    # ---------------------------------------
+
+    ensemble = EnsembleModel(baseline, bert_model)
+    y_test_pred_ensemble, ensemble_metrics = ensemble.evaluate(X_test, y_test)
+    results['ensemble'] = ensemble_metrics
+
+    plot_confusion_matrix(
+        y_test, y_test_pred_ensemble,
+        "Ensemble Model (TF-IDF + BERT) - Confusion Matrix"
+        "../results/confusion-matrices/ensemble_confusion_matrix.png"
     )
 
     # ---------------------------------------
