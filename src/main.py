@@ -4,7 +4,7 @@ Ben Snaith (230106507)
 """
 
 import random
-import os
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -59,9 +59,16 @@ TRANSFORMER_CONFIG = {        # applies to BERT
     'max_length': 128,        # maximum token sequence length
 }
 
-# create the results directory if it doesn't exist
-os.makedirs("../results", exist_ok=True);
-os.makedirs("../results/confusion-matrices", exist_ok=True)
+# platform-agnostic path handling
+SCRIPT_DIR = Path(__file__).parent.resolve()
+BASE_DIR = SCRIPT_DIR.parent
+
+DATA_PATH = BASE_DIR / "data" / "raw" / "twitter_emotion_data.csv"
+RESULTS_DIR = BASE_DIR / "results"
+CONFUSION_DIR = RESULTS_DIR / "confusion-matrices"
+
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+CONFUSION_DIR.mkdir(parents=True, exist_ok=True)
 
 # ----------------------------------
 # UTILITY
@@ -621,8 +628,14 @@ def main():
 
     set_seed(RANDOM_SEED)
 
+    print(f"\nPath Information:")
+    print(f"\tScript location: {SCRIPT_DIR}")
+    print(f"\tBase directory: {BASE_DIR}")
+    print(f"\tCSV path: {DATA_PATH}")
+    print(f"\tCSV exists: {DATA_PATH.exists()}\n")
+
     X_train, y_train, X_test, y_test = load_and_split_data(
-        '../data/raw/twitter_emotion_data.csv', TEST_RATIO
+        str(DATA_PATH), TEST_RATIO
     )
 
     # Use some of the training data for validation (BERT)
@@ -651,7 +664,7 @@ def main():
     plot_confusion_matrix(
         y_test, y_test_pred_baseline,
         "TF-IDF Model - Confusion Matrix",
-        "../results/confusion-matrices/tf_idf_confusion_matrix.png"
+        str(CONFUSION_DIR / "tf_idf_confusion_matrix.png")
     )
 
     # ---------------------------------------
@@ -679,7 +692,7 @@ def main():
     plot_confusion_matrix(
         y_test, y_test_pred_bert,
         "BERT Model - Confusion Matrix",
-        "../results/confusion-matrices/bert_confusion_matrix.png"
+        str(CONFUSION_DIR / "bert_confusion_matrix.png")
     )
 
     # ---------------------------------------
@@ -693,7 +706,7 @@ def main():
     plot_confusion_matrix(
         y_test, y_test_pred_ensemble,
         "Ensemble Model (TF-IDF + BERT) - Confusion Matrix",
-        "../results/confusion-matrices/ensemble_confusion_matrix.png"
+        str(CONFUSION_DIR / "ensemble_confusion_matrix.png")
     )
 
     # ---------------------------------------
