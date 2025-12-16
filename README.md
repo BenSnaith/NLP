@@ -3,6 +3,8 @@ Natural Language Processing Coursework; Option 1: Emotional Classification of Tw
 
 All aspects of this repository were created by Ben Snaith (230106507).
 
+NOTE: IN THE CASE OF A SEVERE ERROR WITH SUBMISSION, THE WORKING SOURCE CODE CAN BE FOUND [HERE](https://github.com/BenSnaith/NLP)
+
 ## Setup
 ```shell
 python3 -m venv venv

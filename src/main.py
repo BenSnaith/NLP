@@ -1,9 +1,10 @@
 """
-DG3NLP Coursework: Emotional Classification of Tweets
+DG3NLP Coursework: Emotion Classification of Tweets
 Ben Snaith (230106507)
 """
 
 import random
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -11,7 +12,7 @@ import seaborn as sns
 from time import time
 
 # Scikit-learn
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -24,11 +25,11 @@ from sklearn.metrics import (
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torch.optim import AdamW
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, BertTokenizer, BertForSequenceClassification
+from transformers import BertTokenizer, BertForSequenceClassification
 from tqdm import tqdm
 
 # ----------------------------------
-# GLOBAL STATE
+# CONSTANTS / GLOBAL STATE
 # ----------------------------------
 
 # NOTE: ensure this is the same as in README.md to ensure consistent results
@@ -45,26 +46,33 @@ EMOTION_LABELS = {
 }
 
 TFIDF_CONFIG = {
-    'max_features': 5000,
-    'ngram_range': (1, 2),
-    'min_df': 2,
-    'max_iter': 1000,
+    'max_features': 16000,    # vocabulary size limit
+    'ngram_range': (1, 2),    # capture unigrams and bigrams
+    'min_df': 2,              # minimum document frequency
+    'max_iter': 1000,         # logistic regression iterations
 }
 
-TRANSFORMER_CONFIG = { # applies to both GPT2 and BERT
-    'batch_size': 16,
-    'learning_rate': 5e-5,
-    'num_epochs': 3,
-    'max_length': 128,
+TRANSFORMER_CONFIG = {        # applies to BERT
+    'batch_size': 16,         # balance between memory and training speed
+    'learning_rate': 5e-5,    # standard BERT fine tuning rate
+    'num_epochs': 3,          # prevent overfitting on a small dataset
+    'max_length': 128,        # maximum token sequence length
 }
 
-# add mkdirs later
+# create the results directory if it doesn't exist
+os.makedirs("../results", exist_ok=True);
+os.makedirs("../results/confusion-matrices", exist_ok=True)
 
 # ----------------------------------
 # UTILITY
 # ----------------------------------
 
 def set_seed(seed):
+    """
+    Sets random seeds across all libraries for reproducible results.
+
+    :param seed(int): all randomisation will be seeded with this value.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -72,7 +80,16 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
 
-def load_and_split_data(csv_path, test_ratio=1.0):
+def load_and_split_data(csv_path, test_ratio=0.1):
+    """
+    Load emotion dataset from CSV and split into test/train sets.
+
+    Shuffles data before splitting to ensure random distribution of emotions.
+
+    :param csv_path(str): path to CSV file containing dataset
+    :param test_ratio(float): proportion of data reserved for testing
+    :return(tuple): (X_train, y_train, X_test, y_test) lists of tweets and labels
+    """
     print(f"Loading dataset from {csv_path}")
 
     raw_data = pd.read_csv(csv_path)
@@ -96,6 +113,16 @@ def load_and_split_data(csv_path, test_ratio=1.0):
     return X_train, y_train, X_test, y_test
 
 def plot_confusion_matrix(y_true, y_pred, title, save_path=None):
+    """
+    Generate and save confusion matrix visualisation.
+
+    Confusion matrices reveal error patterns in models.
+
+    :param y_true(list): true labels.
+    :param y_pred(list): predicted labels from model.
+    :param title(str): title for matrix.
+    :param save_path(str, optional): path to save confusion matrix.
+    """
     cm = confusion_matrix(y_true, y_pred)
 
     plt.figure(figsize=(10, 8))
@@ -115,6 +142,16 @@ def plot_confusion_matrix(y_true, y_pred, title, save_path=None):
     plt.close()
 
 def print_classification_metrics(y_true, y_pred, model_name):
+    """
+    Calculate and display classification metrics.
+
+    Reports overall metrics (accuracy, F1) and per-class performance.
+
+    :param y_true(list): true labels.
+    :param y_pred(list): predicted labels from model.
+    :param model_name(str): name of model for display.
+    :return(dict): containing accuracy, macro_f1 and weighted_f1 scores.
+    """
     print(f"{'-' * 60}")
     print(f"{model_name} - Report")
     print(f"{'-' * 60}")
@@ -147,7 +184,19 @@ def print_classification_metrics(y_true, y_pred, model_name):
 # --------------------------------
 
 class TFIDFModel:
-    def __init__(self, max_features=20000, ngram_range=(1, 2), min_df=2, max_iter=1000):
+    """
+    Traditional ML approach using TF-IDF vectorisation + Logistic Regression.
+
+    TF-IDF weights terms by their discriminative power across the corpus.
+    """
+
+    def __init__(self, max_features=16000, ngram_range=(1, 2), min_df=2, max_iter=1000):
+        """
+        :param max_features(int): maximum vocabulary size.
+        :param ngram_range(tuple): range of n-grams to extract.
+        :param min_df(int): minimum document frequency to include term.
+        :param max_iter(int): maximum iterations for logistic regression convergence.
+        """
         self.vectorizer = TfidfVectorizer(
             max_features=max_features,
             ngram_range=ngram_range,
@@ -164,6 +213,12 @@ class TFIDFModel:
         )
 
     def train(self, X_train, y_train):
+        """
+        Train TF-IDF model on emotion labelled tweets.
+
+        :param X_train(list): training tweets.
+        :param y_train(list): training labels.
+        """
         start_time = time()
 
         print(f"\nVectorising training data with TF-IDF...")
@@ -177,11 +232,19 @@ class TFIDFModel:
         train_time = time() - start_time
         print(f"Training complete in {train_time:.2f} seconds")
 
-        self._show_top_features(n_features=5)
+        self._show_top_features()
 
         return self
 
     def _show_top_features(self, n_features=5):
+        """
+        Display top discriminative features for each emotion class.
+
+        Helps show which words most strongly predict each emotion
+        and validate model is learning correctly.
+
+        :param n_features(int): number of top features to display per class.
+        """
         print(f"\nTop {n_features} features per class:")
         feature_names = self.vectorizer.get_feature_names_out()
 
@@ -197,20 +260,55 @@ class TFIDFModel:
             print(f"\t{emotion_name}: {', '.join(top_features)}")
 
     def predict(self, X):
+        """
+        Predict emotion labels for new tweets.
+
+        :param X(list): tweets to be labelled.
+        :return(np.array): predicted emotion labels.
+        """
         X_vec = self.vectorizer.transform(X)
         return self.model.predict(X_vec)
 
     def predict_proba(self, X):
+        """
+        Predict emotion probabilities for ensemble.
+
+        Ensemble uses the "confidence" of each prediction in order
+        to choose between TF-IDF predictions and BERT predictions.
+
+        :param X(list): tweet texts to classify.
+        :return(np.array): probability matrix.
+        """
         X_vec = self.vectorizer.transform(X)
         return self.model.predict_proba(X_vec)
 
     def evaluate(self, X_test, y_test):
+        """
+        Evaluate model on test set.
+
+        :param X_test(list): test tweets.
+        :param y_test(list): true labels.
+        :return(tuple): (predictions, metrics_dict).
+        """
         y_pred = self.predict(X_test)
         metrics = print_classification_metrics(y_test, y_pred, "TD-IDF Model")
         return y_pred, metrics
 
 class EmotionDataset(Dataset):
+    """
+    PyTorch Dataset for emotion labelled tweets with BERT tokenisation.
+
+    Handles preprocessing for transformer models.
+    """
     def __init__(self, texts, labels, tokeniser, max_length=128):
+        """
+        Initialise dataset with tweets and labels.
+
+        :param texts(list): texts.
+        :param labels(list): labels.
+        :param tokeniser(BertTokenizer): BERT tokeniser instance.
+        :param max_length: max tokens per instance.
+        """
         self.texts = texts
         self.labels = labels
         self.tokeniser = tokeniser
@@ -220,6 +318,12 @@ class EmotionDataset(Dataset):
         return len(self.texts)
 
     def __getitem__(self, idx):
+        """
+        Get single tokenised sample for training.
+
+        :param idx(int): sample index.
+        :return(dict): dict containing input_ids, attention_mask, and labels tensors.
+        """
         text = str(self.texts[idx])
         label = self.labels[idx]
 
@@ -238,7 +342,19 @@ class EmotionDataset(Dataset):
         }
 
 class BertModel:
+    """
+    BERT transformer for emotion classification.
+
+    Uses bidirectional attention to understand context in both directions.
+    """
     def __init__(self, model_name='bert-base-uncased', num_labels=6, device=None):
+        """
+        Initialise BERT model with pre-trained weights.
+
+        :param model_name(str): HuggingFace model identitifer.
+        :param num_labels(int): number of emotion classes.
+        :param device(torch.device, optional): computing device, auto detects if GPU is available.
+        """
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"\nUsing device: {self.device} (If using CPU this might take a while...)")
 
@@ -255,6 +371,20 @@ class BertModel:
 
     def train(self, X_train, y_train, X_val, y_val,
               batch_size=16, learning_rate=2e-5, num_epochs=3):
+        """
+        Train BERT on emotion classification task.
+
+        Uses multiple epochs to prevent overfitting.
+
+        :param X_train(list): training tweets.
+        :param y_train(list): training labels.
+        :param X_val(list): validation tweets.
+        :param y_val(list): validation labels.
+        :param batch_size(int): samples per batch.
+        :param learning_rate(float): AdamW training rate.
+        :param num_epochs(int): training epochs.
+        :return(self): trained model instance for method chaining
+        """
         print(f"{'-' * 60}")
         print("Training Bert Model (Fine-tuned Transformer)")
         print(f"{'-' * 60}")
@@ -320,6 +450,12 @@ class BertModel:
         return self
 
     def _evaluate_loader(self, dataloader):
+        """
+        Evaluate model on DataLoader.
+
+        :param dataloader(DataLoader): data to evaluate.
+        :return(tuple): (accuracy, average_loss).
+        """
         self.model.eval()
         total_loss = 0
         correct = 0
@@ -348,6 +484,12 @@ class BertModel:
         return accuracy, avg_loss
 
     def predict(self, X):
+        """
+        Generate predictions for new tweets.
+
+        :param X(list): tweets texts to classify.
+        :return(np.array): predicted emotion labels.
+        """
         dataset = EmotionDataset(X, [0] * len(X), self.tokeniser)
         dataloader = DataLoader(dataset, batch_size=32)
 
@@ -370,6 +512,12 @@ class BertModel:
         return np.array(predictions)
 
     def predict_proba(self, X):
+        """
+        Generate probability/confidence for ensemble.
+
+        :param X(list): tweet texts to classify.
+        :return(np.array): probability matrix (n_samples, n_classes).
+        """
         dataset = EmotionDataset(X, [0] * len(X), self.tokeniser)
         dataloader = DataLoader(dataset, batch_size=32)
 
@@ -392,36 +540,77 @@ class BertModel:
         return np.array(all_probs)
 
     def evaluate(self, X_test, y_test):
+        """
+        Evaluate model on test set.
+
+        :param X_test(list): test tweets.
+        :param y_test(list): true labels.
+        :return(tuple): (predictions, metrics_dict)
+        """
         y_pred = self.predict(X_test)
         metrics = print_classification_metrics(y_test, y_pred, "BERT Model")
         return y_pred, metrics
 
 class EnsembleModel:
-    def __init__(self, tfidf_model, transformer_model,
-                 baseline_weight=0.3, transformer_weight=0.7):
+    """
+    Confidence-based ensemble combining TF-IDF and BERT predictions.
+    """
+
+    def __init__(self, tfidf_model, bert_model):
+        """
+        :param tfidf_model(TFIDFModel): trained TF-IDF model.
+        :param bert_model(BertModel): trained BERT model.
+        """
         self.tfidf = tfidf_model
-        self.transformer = transformer_model
-        self.baseline_weight = baseline_weight
-        self.transformer_weight = transformer_weight
+        self.bert = bert_model
 
     def predict(self, X):
-        print("Making ensemble predictions")
+        """
+        Generate ensemble predictions.
 
+        Decisions logic:
+        1. If models agree then use the consesus.
+        2. If BERT confidence > TF-IDF confidence + 0.2 use BERT.
+        3. Otherwise use TF-IDF
+
+        The 0.2 threshold prevents BERT from dominating all decisions.
+
+        :param X(list): tweets to classify.
+        :return(np.array): ensemble predictions
+        """
+        # Get predictions from both models
         tfidf_preds = self.tfidf.predict(X)
-        transformer_preds = self.transformer.predict(X)
+        bert_preds = self.bert.predict(X)
 
+        # Get probabilities
+        tfidf_probs = self.tfidf.predict_proba(X)
+        bert_probs = self.bert.predict_proba(X)
+
+        # For each example, use the model with higher confidence
         ensemble_preds = []
-        for tf_pred, tr_pred in zip(tfidf_preds, transformer_preds):
-            if tf_pred == tr_pred:
-                ensemble_preds.append(tf_pred)
+        for i in range(len(X)):
+            tfidf_confidence = np.max(tfidf_probs[i])
+            bert_confidence = np.max(bert_probs[i])
+
+            if tfidf_preds[i] == bert_preds[i]:
+                ensemble_preds.append(tfidf_preds[i])
+            elif bert_confidence > tfidf_confidence + 0.2:
+                ensemble_preds.append(bert_preds[i])
             else:
-                ensemble_preds.append(tr_pred)
+                ensemble_preds.append(tfidf_preds[i])
 
         return np.array(ensemble_preds)
 
     def evaluate(self, X_test, y_test):
+        """
+        Evaluate ensemble on test data.
+
+        :param X_test(list): test tweets.
+        :param y_test(list): true labels.
+        :return(tuple): (predictions, metrics_dict).
+        """
         y_pred = self.predict(X_test)
-        metrics = print_classification_metrics(y_test, y_pred, "Ensemble Model (TF-IDF + BERT)")
+        metrics = print_classification_metrics(y_test, y_pred, "Ensemble Model")
         return y_pred, metrics
 
 def main():
@@ -430,14 +619,13 @@ def main():
     print("Ben Snaith (230106507)")
     print(f"{'-' * 60}")
 
-    # SET RANDOM SEED
     set_seed(RANDOM_SEED)
 
     X_train, y_train, X_test, y_test = load_and_split_data(
         '../data/raw/twitter_emotion_data.csv', TEST_RATIO
     )
 
-    # Use some of the training data for validation (transformers)
+    # Use some of the training data for validation (BERT)
     val_size = int(len(X_train) * 0.1)
     X_val = X_train[-val_size:]
     y_val = y_train[-val_size:]
@@ -458,7 +646,7 @@ def main():
     baseline.train(X_train, y_train)
 
     y_test_pred_baseline, test_metrics = baseline.evaluate(X_test, y_test)
-    results['baseline'] = test_metrics
+    results['TF-IDF'] = test_metrics
 
     plot_confusion_matrix(
         y_test, y_test_pred_baseline,
@@ -504,7 +692,7 @@ def main():
 
     plot_confusion_matrix(
         y_test, y_test_pred_ensemble,
-        "Ensemble Model (TF-IDF + BERT) - Confusion Matrix"
+        "Ensemble Model (TF-IDF + BERT) - Confusion Matrix",
         "../results/confusion-matrices/ensemble_confusion_matrix.png"
     )
 
